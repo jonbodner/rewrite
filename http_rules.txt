@@ -1,0 +1,5 @@
+vars:
+path string
+handlerFunc func(http.ResponseWriter, *http.Request)
+rules:
+http.HandleFunc(path, handlerFunc) -> http.HandleFunc(path, instrument.WrapHandlerFunc(handlerFunc))

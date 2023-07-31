@@ -1,0 +1,10 @@
+vars:
+path string
+handlerFunc func(http.ResponseWriter, *http.Request)
+myVar foo
+myOtherVar bar.Bat
+rules:
+r.Get(path, handlerFunc) -> r.Get(path, instrument.WrapHandlerFunc(handlerFunc))
+r.Post(path, handlerFunc) -> r.Post(path, instrument.WrapHandlerFunc(handlerFunc))
+r.Put(path, handlerFunc) -> r.Put(path, instrument.WrapHandlerFunc(handlerFunc))
+r.Delete(path, handlerFunc) -> r.Delete(path, instrument.WrapHandlerFunc(handlerFunc))
