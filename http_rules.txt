@@ -1,5 +1,12 @@
 vars:
 path string
 handlerFunc func(http.ResponseWriter, *http.Request)
+handler http.Handler
+a int
+b string
+c []string
+d bool
 rules:
 http.HandleFunc(path, handlerFunc) -> http.HandleFunc(path, instrument.WrapHandlerFunc(handlerFunc))
+http.Handle(path, handler) -> http.Handle(path, instrument.WrapHandler(handler))
+test(a,b,c) -> func() { fmt.Println(a); d := wrapTest(test(a, b, c)); fmt.Println("done:", d)}()

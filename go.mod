@@ -1,6 +1,6 @@
 module rewrite
 
-go 1.21rc2
+go 1.20
 
 require github.com/dave/dst v0.27.2
 

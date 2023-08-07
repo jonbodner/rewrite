@@ -213,7 +213,7 @@ func applyRules(sc dst.Node, ri RuleInfo) {
 								// this means that an incoming parameter isn't used in the output...
 								continue
 							}
-							toParam := dup(rule.outParams[newLocation[0]])
+							toParam := dst.Clone(rule.outParams[newLocation[0]]).(dst.Expr)
 							newArgs[newLocation[0]] = buildResultExpr(argToPlace, newLocation, toParam)
 						}
 						ceCurNode.Args = newArgs
@@ -352,40 +352,15 @@ func buildResultExpr(argToPlace dst.Expr, locations []int, toParam dst.Expr) dst
 	return nil
 }
 
-func dup(in dst.Expr) dst.Expr {
-	switch in := in.(type) {
-	case *dst.Ident:
-		return &dst.Ident{Name: in.Name, Path: in.Path}
-	case *dst.CallExpr:
-		newArgs := make([]dst.Expr, len(in.Args))
-		for i, v := range in.Args {
-			newArgs[i] = dup(v)
-		}
-		return &dst.CallExpr{
-			Fun:      dup(in.Fun),
-			Args:     newArgs,
-			Ellipsis: in.Ellipsis,
-		}
-	case *dst.SelectorExpr:
-		return &dst.SelectorExpr{
-			X:   dup(in.X),
-			Sel: dup(in.Sel).(*dst.Ident),
-		}
-	case *dst.IndexExpr:
-		return &dst.IndexExpr{
-			X:     dup(in.X),
-			Index: dup(in.Index),
-		}
-	case *dst.BasicLit:
-		return &dst.BasicLit{Kind: in.Kind, Value: in.Value}
-	default:
-		return &dst.BasicLit{Kind: token.STRING, Value: "unknown"}
-	}
-}
-
 func buildPreInfo(dp1 dst.Node) (string, []string) {
 	cedb1 := dp1.(*dst.CallExpr)
-	funcName := cedb1.Fun.(*dst.SelectorExpr).Sel.Name
+	var funcName string
+	switch fun := cedb1.Fun.(type) {
+	case *dst.SelectorExpr:
+		funcName = fun.Sel.Name
+	case *dst.Ident:
+		funcName = fun.Name
+	}
 	params := make([]string, len(cedb1.Args))
 	for i, v := range cedb1.Args {
 		params[i] = v.(*dst.Ident).Name
@@ -395,8 +370,15 @@ func buildPreInfo(dp1 dst.Node) (string, []string) {
 
 func buildPostInfo(dp2 dst.Node) (string, []dst.Expr) {
 	cedb2 := dp2.(*dst.CallExpr)
-	funcName := cedb2.Fun.(*dst.SelectorExpr).Sel.Name
-	return funcName, cedb2.Args
+	switch fun := cedb2.Fun.(type) {
+	case *dst.SelectorExpr:
+		funcName := fun.Sel.Name
+		return funcName, cedb2.Args
+	case *dst.FuncLit:
+		return "", []dst.Expr{fun}
+	default:
+		panic("unknown type")
+	}
 }
 
 type ParamMap struct {

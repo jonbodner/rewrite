@@ -1,3 +1,3 @@
 module http_sample
 
-go 1.21rc2
+go 1.21
