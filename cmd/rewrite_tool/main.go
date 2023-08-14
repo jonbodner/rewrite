@@ -10,6 +10,9 @@ import (
 	"strings"
 )
 
+/*
+go build -a -toolexec "/Users/jon/projects/rewrite/rewrite_tool /Users/jon/projects/rewrite/chi_sample/ /Users/jon/projects/rewrite/chi_sample/chi_rules.txt"
+*/
 func main() {
 	if len(os.Args) < 4 {
 		fmt.Fprintln(os.Stderr, "usage: rewrite_tool path rule_file <toolexec arguments>")
