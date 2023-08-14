@@ -1,8 +1,6 @@
 vars:
 path string
 handlerFunc func(http.ResponseWriter, *http.Request)
-myVar foo
-myOtherVar bar.Bat
 rules:
 r.Get(path, handlerFunc) -> r.Get(path, instrument.WrapHandlerFunc(handlerFunc))
 r.Post(path, handlerFunc) -> r.Post(path, instrument.WrapHandlerFunc(handlerFunc))

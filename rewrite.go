@@ -1,4 +1,4 @@
-package main
+package rewrite
 
 import (
 	"bufio"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/dave/dst"
 	"github.com/dave/dst/decorator"
-	"github.com/dave/dst/decorator/resolver/guess"
 	"github.com/dave/dst/dstutil"
 	"go/parser"
 	"go/token"
@@ -15,20 +14,7 @@ import (
 	"strings"
 )
 
-func main() {
-	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: rewrite rule_file source_file")
-		os.Exit(1)
-	}
-	varType, rules, err := parseRuleFile(os.Args[1])
-	if err != nil {
-		panic(err)
-	}
-	code, err := os.ReadFile(os.Args[2])
-	if err != nil {
-		panic(err)
-	}
-
+func BuildRulePairs(rules []string) []RulePair {
 	var rulePairs []RulePair
 	for _, v := range rules {
 		in, out, _ := strings.Cut(v, "->")
@@ -37,10 +23,10 @@ func main() {
 			out: strings.TrimSpace(out),
 		})
 	}
-	process(varType, rulePairs, string(code))
+	return rulePairs
 }
 
-func parseRuleFile(ruleFile string) ([]string, []string, error) {
+func ParseRuleFile(ruleFile string) ([]string, []string, error) {
 	f, err := os.Open(ruleFile)
 	if err != nil {
 		return nil, nil, err
@@ -82,34 +68,69 @@ type RulePair struct {
 	out string
 }
 
-func process(varTypes []string, rules []RulePair, sampleCode string) {
+func BuildPackageMap(packages []string) map[string]string {
+	out := map[string]string{}
+	for _, v := range packages {
+		imp, pkg, _ := strings.Cut(v, " ")
+		out[imp] = pkg
+	}
+	return out
+}
+
+func Process(varTypes []string, rules []RulePair, sampleCode string) ([]byte, error) {
 	ri, err := processInput(varTypes, rules)
 	if err != nil {
 		panic(err)
 	}
 
-	sc, err := decorator.Parse(sampleCode)
+	deco := decorator.NewDecorator(token.NewFileSet())
+	sc, err := deco.Parse(sampleCode)
 	if err != nil {
 		panic(err)
 	}
 
 	applyRules(sc, ri)
 
-	err = printResult(sc)
-	if err != nil {
-		panic(err)
-	}
+	//for k, v := range packages {
+	//	sc.Imports = append(sc.Imports, &dst.ImportSpec{
+	//		Path: &dst.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, k)},
+	//		Name: &dst.Ident{Name: v},
+	//	})
+	//}
+	sc.Decls = append([]dst.Decl{
+		&dst.GenDecl{
+			Tok: token.IMPORT,
+			Specs: []dst.Spec{
+				&dst.ImportSpec{
+					Path: &dst.BasicLit{
+						Kind:  token.STRING,
+						Value: fmt.Sprintf(`"%s"`, "github.com/jonbodner/orchestrion/instrument"),
+					},
+				},
+			},
+			Decs: dst.GenDeclDecorations{
+				NodeDecs: dst.NodeDecs{
+					Before: dst.NewLine,
+					Start:  dst.Decorations{dd_startinstrument},
+					After:  dst.NewLine,
+					End:    dst.Decorations{"\n", dd_endinstrument},
+				},
+			},
+		},
+	}, sc.Decls...)
+	out, err := printResult(sc)
+	return out, err
 }
 
-func printResult(sc *dst.File) error {
-	res := decorator.NewRestorerWithImports("sample.go", guess.New())
+func printResult(sc *dst.File) ([]byte, error) {
+	res := decorator.NewRestorer()
 	var out bytes.Buffer
 	err := res.Fprint(&out, sc)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	fmt.Println(out.String())
-	return nil
+
+	return out.Bytes(), nil
 }
 
 func processInput(varTypes []string, rulePairs []RulePair) (RuleInfo, error) {
@@ -195,43 +216,56 @@ type RuleInfo struct {
 
 func applyRules(sc dst.Node, ri RuleInfo) {
 	dstutil.Apply(sc, func(cursor *dstutil.Cursor) bool {
-		curNode := cursor.Node()
-		if ceCurNode, ok := curNode.(*dst.CallExpr); ok {
-			if ceCurNodeFunc, ok := ceCurNode.Fun.(*dst.SelectorExpr); ok {
-				// check every rule
-				for _, rule := range ri.rules {
-					// check the function name, the number of args, and the types
-					if ceCurNodeFunc.Sel.Name == rule.inFuncName && len(ceCurNode.Args) == len(rule.inParams) && match(ceCurNode.Args, rule.inParams, ri.typesMap) {
-						// convert!
-						// fix name
-						ceCurNodeFunc.Sel.Name = rule.outFuncName
-						// walk the parameters, find the ones with matching names, use them to reassign parameters
-						newArgs := make([]dst.Expr, len(ceCurNode.Args))
-						for i, argToPlace := range ceCurNode.Args {
-							newLocation := rule.paramMap.positions[i]
-							if newLocation == nil {
-								// this means that an incoming parameter isn't used in the output...
-								continue
-							}
-							toParam := dup(rule.outParams[newLocation[0]])
-							newArgs[newLocation[0]] = buildResultExpr(argToPlace, newLocation, toParam)
-						}
-						ceCurNode.Args = newArgs
-						// wrap with comments
-						ceCurNode.Decs = dst.CallExprDecorations{
-							NodeDecs: dst.NodeDecs{
-								Before: dst.NewLine,
-								Start:  dst.Decorations{dd_startinstrument},
-								After:  dst.NewLine,
-								End:    dst.Decorations{"\n", dd_endinstrument},
-							}}
-						return false
-					}
-				}
+		ceCurNode, ok := cursor.Node().(*dst.CallExpr)
+		if !ok {
+			return true
+		}
+		ceCurNodeFunc, ok := ceCurNode.Fun.(*dst.SelectorExpr)
+		if !ok {
+			return true
+		}
+		// check every rule
+		for _, rule := range ri.rules {
+			applied := checkApplyRule(ceCurNodeFunc, rule, ceCurNode, ri)
+			if applied {
+				return false
 			}
 		}
 		return true
 	}, nil)
+}
+
+func checkApplyRule(ceCurNodeFunc *dst.SelectorExpr, rule Rule, ceCurNode *dst.CallExpr, ri RuleInfo) bool {
+	// check the function name, the number of args, and the types
+	if ceCurNodeFunc.Sel.Name != rule.inFuncName ||
+		len(ceCurNode.Args) != len(rule.inParams) ||
+		!match(ceCurNode.Args, rule.inParams, ri.typesMap) {
+		return false
+	}
+	// convert!
+	// fix name
+	ceCurNodeFunc.Sel.Name = rule.outFuncName
+	// walk the parameters, find the ones with matching names, use them to reassign parameters
+	newArgs := make([]dst.Expr, len(ceCurNode.Args))
+	for i, argToPlace := range ceCurNode.Args {
+		newLocation := rule.paramMap.positions[i]
+		if newLocation == nil {
+			// this means that an incoming parameter isn't used in the output...
+			continue
+		}
+		toParam := dst.Clone(rule.outParams[newLocation[0]]).(dst.Expr)
+		newArgs[newLocation[0]] = buildResultExpr(argToPlace, newLocation, toParam)
+	}
+	ceCurNode.Args = newArgs
+	// wrap with comments
+	ceCurNode.Decs = dst.CallExprDecorations{
+		NodeDecs: dst.NodeDecs{
+			Before: dst.NewLine,
+			Start:  dst.Decorations{dd_startinstrument},
+			After:  dst.NewLine,
+			End:    dst.Decorations{"\n", dd_endinstrument},
+		}}
+	return true
 }
 
 func match(args []dst.Expr, params []string, typesMap map[string]dst.Node) bool {
@@ -350,37 +384,6 @@ func buildResultExpr(argToPlace dst.Expr, locations []int, toParam dst.Expr) dst
 		return tp
 	}
 	return nil
-}
-
-func dup(in dst.Expr) dst.Expr {
-	switch in := in.(type) {
-	case *dst.Ident:
-		return &dst.Ident{Name: in.Name, Path: in.Path}
-	case *dst.CallExpr:
-		newArgs := make([]dst.Expr, len(in.Args))
-		for i, v := range in.Args {
-			newArgs[i] = dup(v)
-		}
-		return &dst.CallExpr{
-			Fun:      dup(in.Fun),
-			Args:     newArgs,
-			Ellipsis: in.Ellipsis,
-		}
-	case *dst.SelectorExpr:
-		return &dst.SelectorExpr{
-			X:   dup(in.X),
-			Sel: dup(in.Sel).(*dst.Ident),
-		}
-	case *dst.IndexExpr:
-		return &dst.IndexExpr{
-			X:     dup(in.X),
-			Index: dup(in.Index),
-		}
-	case *dst.BasicLit:
-		return &dst.BasicLit{Kind: in.Kind, Value: in.Value}
-	default:
-		return &dst.BasicLit{Kind: token.STRING, Value: "unknown"}
-	}
 }
 
 func buildPreInfo(dp1 dst.Node) (string, []string) {

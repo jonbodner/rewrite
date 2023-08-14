@@ -1,6 +1,6 @@
-module rewrite
+module github.com/jonbodner/rewrite
 
-go 1.21rc2
+go 1.21
 
 require github.com/dave/dst v0.27.2
 
